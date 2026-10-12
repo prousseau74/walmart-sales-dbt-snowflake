@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: walmart
+    database: DBT_LEARNING
+    schema: RAW
+    tables:
+      - name: department
+      - name: stores
+      - name: fact

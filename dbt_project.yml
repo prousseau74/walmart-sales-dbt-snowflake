@@ -1,0 +1,12 @@
+name: my_project
+version: '1.0.0'
+profile: my_project
+
+model-paths: ["models"]
+
+models:
+  my_project:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

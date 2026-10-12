@@ -1,0 +1,13 @@
+my_project:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: <your_account_identifier>
+      user: <your_username>
+      password: <your_password>
+      role: <your_role>
+      warehouse: <your_warehouse>
+      database: <your_database>
+      schema: dbt_dev
+      threads: 4
