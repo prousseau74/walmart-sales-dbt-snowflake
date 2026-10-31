@@ -51,13 +51,15 @@ CSV files (S3) -> Snowflake RAW schema -> dbt staging models -> dbt marts (2 dim
 ## How to run it
 
 1. Create an S3 bucket, upload the CSV files, and run `snowflake/setup.sql`
-2. Copy `profiles.yml.example` to `~/.dbt/profiles.yml` and fill in your values
+2. Copy `profiles.yml.example` to `~/.dbt/profiles.yml` and fill in your account, user and
+   password. Keep database `WALMART_E2E` and schema `DBT_PETER`: the Streamlit app reads from
+   that location (set in `streamlit_app/common.py`). Raw data is read from `DBT_LEARNING.RAW`.
 3. Run `pip install dbt-snowflake`, then `dbt build`
 4. Create a Streamlit in Snowflake app and paste in the files from `streamlit_app/`
 
 ## Data source
 
-(https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting)
+[Walmart Recruiting – Store Sales Forecasting (Kaggle)](https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting)
 
 ## Tools
 
