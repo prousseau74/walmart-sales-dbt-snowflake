@@ -57,7 +57,7 @@ CSV files (S3) -> Snowflake RAW schema -> dbt staging models -> dbt marts (2 dim
 
 ## Data source
 
-(add a link to where the dataset came from. The data files are not included in this repo.)
+(https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting)
 
 ## Tools
 
