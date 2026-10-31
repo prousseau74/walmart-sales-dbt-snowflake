@@ -1,152 +1,105 @@
-   SHOW WAREHOUSES;
-   ALTER WAREHOUSE COMPUTE_WH RESUME;
-     SHOW WAREHOUSES;
-     SHOW DATABASES
-CREATE DATABASE IF NOT EXISTS WALMART_E2E
+USE ROLE ACCOUNTADMIN;
 
-   SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS account_identifier;
-   SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER LIMIT 10;
+-- ---------------------------------------------------------------------
+-- 1. Warehouse: keep compute cheap (suspends after 60 seconds idle)
+-- ---------------------------------------------------------------------
+ALTER WAREHOUSE COMPUTE_WH SET
+  WAREHOUSE_SIZE = 'XSMALL'
+  AUTO_SUSPEND   = 60
+  AUTO_RESUME    = TRUE;
 
-   SELECT current_region()
+USE WAREHOUSE COMPUTE_WH;
 
-   USE ROLE ACCOUNTADMIN;
+-- ---------------------------------------------------------------------
+-- 2. Databases and schemas
+--    DBT_LEARNING.RAW  = raw data loaded from S3
+--    DBT_LEARNING.APPS = Streamlit app
+--    WALMART_E2E       = where dbt builds the models (schema DBT_PETER)
+-- ---------------------------------------------------------------------
+CREATE DATABASE IF NOT EXISTS DBT_LEARNING;
+CREATE SCHEMA   IF NOT EXISTS DBT_LEARNING.RAW;
+CREATE SCHEMA   IF NOT EXISTS DBT_LEARNING.APPS;
+CREATE DATABASE IF NOT EXISTS WALMART_E2E;
 
-CREATE STORAGE INTEGRATION s3_walmart_int
-  TYPE = EXTERNAL_STAGE
-  STORAGE_PROVIDER = 'S3'
-  ENABLED = TRUE
-  STORAGE_AWS_ROLE_ARN = '<YOUR_ROLE>'
-  STORAGE_ALLOWED_LOCATIONS = ('s3://s3-walmart-e2e/walmart/');
+-- ---------------------------------------------------------------------
+-- 3. Storage integration: Snowflake's secure link to the IAM role
+-- ---------------------------------------------------------------------
+CREATE STORAGE INTEGRATION IF NOT EXISTS s3_walmart_int
+  TYPE                      = EXTERNAL_STAGE
+  STORAGE_PROVIDER          = 'S3'
+  ENABLED                   = TRUE
+  STORAGE_AWS_ROLE_ARN      = '<ROLE_ARN>'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://<BUCKET>/walmart/');
 
+-- Copy STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID from this output
+-- into the IAM role's trust policy in AWS before continuing.
 DESC INTEGRATION s3_walmart_int;
 
-USE ROLE ACCOUNTADMIN;
-CREATE DATABASE IF NOT EXISTS DBT_LEARNING;
-CREATE SCHEMA IF NOT EXISTS DBT_LEARNING.RAW;
+-- If the allowed location is wrong, fix it with ALTER (keeps the same external ID).
+-- Do NOT use CREATE OR REPLACE: it generates a new external ID and breaks the trust policy.
+-- ALTER STORAGE INTEGRATION s3_walmart_int
+--   SET STORAGE_ALLOWED_LOCATIONS = ('s3://<BUCKET>/walmart/');
+
+-- ---------------------------------------------------------------------
+-- 4. File format and stage
+-- ---------------------------------------------------------------------
 USE SCHEMA DBT_LEARNING.RAW;
 
 CREATE OR REPLACE FILE FORMAT csv_fmt
-  TYPE = CSV
-  PARSE_HEADER = TRUE
+  TYPE                         = CSV
+  PARSE_HEADER                 = TRUE
   FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-  NULL_IF = ('', 'NULL');
+  NULL_IF                      = ('', 'NULL');
+  -- Note: the source writes missing values as 'NA', which is NOT converted here.
+  -- The dbt staging models handle it with TRY_TO_DOUBLE.
 
 CREATE OR REPLACE STAGE walmart_stage
-  URL = 's3://s3-walmart-e2e/walmart/'
+  URL                 = 's3://<BUCKET>/walmart/'
   STORAGE_INTEGRATION = s3_walmart_int
-  FILE_FORMAT = csv_fmt;
+  FILE_FORMAT         = csv_fmt;
 
-  LIST @DBT_LEARNING.RAW.walmart_stage;
+-- Checkpoint: must list department.csv, stores.csv and fact.csv
+LIST @walmart_stage;
 
- USE ROLE ACCOUNTADMIN;
-CREATE DATABASE IF NOT EXISTS DBT_LEARNING;
-CREATE SCHEMA IF NOT EXISTS DBT_LEARNING.RAW;
-USE SCHEMA DBT_LEARNING.RAW;
+-- ---------------------------------------------------------------------
+-- 5. Raw tables, created from the file headers
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE TABLE DEPARTMENT USING TEMPLATE (
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*)) WITHIN GROUP (ORDER BY ORDER_ID)
+  FROM TABLE(INFER_SCHEMA(
+    LOCATION    => '@walmart_stage/department.csv',
+    FILE_FORMAT => 'csv_fmt')));
 
-CREATE OR REPLACE FILE FORMAT csv_fmt
-  TYPE = CSV
-  PARSE_HEADER = TRUE
-  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-  NULL_IF = ('', 'NULL');
+CREATE OR REPLACE TABLE STORES USING TEMPLATE (
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*)) WITHIN GROUP (ORDER BY ORDER_ID)
+  FROM TABLE(INFER_SCHEMA(
+    LOCATION    => '@walmart_stage/stores.csv',
+    FILE_FORMAT => 'csv_fmt')));
 
-CREATE OR REPLACE STAGE walmart_stage
-  URL = 's3://s3-walmart-e2e/walmart/'
-  STORAGE_INTEGRATION = s3_walmart_int
-  FILE_FORMAT = csv_fmt;
+CREATE OR REPLACE TABLE FACT USING TEMPLATE (
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*)) WITHIN GROUP (ORDER BY ORDER_ID)
+  FROM TABLE(INFER_SCHEMA(
+    LOCATION    => '@walmart_stage/fact.csv',
+    FILE_FORMAT => 'csv_fmt')));
 
-  LIST @DBT_LEARNING.RAW.walmart_stage;
+-- ---------------------------------------------------------------------
+-- 6. Load the data
+-- ---------------------------------------------------------------------
+COPY INTO DEPARTMENT FROM @walmart_stage/department.csv MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
+COPY INTO STORES     FROM @walmart_stage/stores.csv     MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
+COPY INTO FACT       FROM @walmart_stage/fact.csv       MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
 
-  USE ROLE ACCOUNTADMIN;
+-- ---------------------------------------------------------------------
+-- 7. Checks
+-- ---------------------------------------------------------------------
+-- Expected: DEPARTMENT 421,570 | STORES 45 | FACT 8,190
+SELECT 'DEPARTMENT' AS table_name, COUNT(*) AS row_count FROM DEPARTMENT
+UNION ALL SELECT 'STORES', COUNT(*) FROM STORES
+UNION ALL SELECT 'FACT',   COUNT(*) FROM FACT;
 
-ALTER STORAGE INTEGRATION s3_walmart_int
-  SET STORAGE_ALLOWED_LOCATIONS = ('s3://s3-wamart-e2e/walmart/');
+-- Missing markdowns are stored as the text 'NA' (expected: 4,158 of 8,190)
+SELECT COUNT(*)                     AS total_rows,
+       COUNT_IF("MarkDown1" = 'NA') AS na_rows
+FROM FACT;
 
-ALTER STAGE DBT_LEARNING.RAW.walmart_stage
-  SET URL = 's3://s3-wamart-e2e/walmart/';
-
-  LIST @DBT_LEARNING.RAW.walmart_stage;
-
-  USE ROLE ACCOUNTADMIN;
-USE WAREHOUSE COMPUTE_WH;
-USE SCHEMA DBT_LEARNING.RAW;
-
-CREATE OR REPLACE TABLE DEPARTMENT
-  USING TEMPLATE (
-    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-    FROM TABLE(INFER_SCHEMA(
-      LOCATION => '@walmart_stage/department.csv',
-      FILE_FORMAT => 'csv_fmt'))
-  );
-
-CREATE OR REPLACE TABLE STORES
-  USING TEMPLATE (
-    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-    FROM TABLE(INFER_SCHEMA(
-      LOCATION => '@walmart_stage/stores.csv',
-      FILE_FORMAT => 'csv_fmt'))
-  );
-
-CREATE OR REPLACE TABLE FACT
-  USING TEMPLATE (
-    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-    FROM TABLE(INFER_SCHEMA(
-      LOCATION => '@walmart_stage/fact.csv',
-      FILE_FORMAT => 'csv_fmt'))
-  );
-
-  COPY INTO DEPARTMENT
-  FROM @walmart_stage/department.csv
-  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
-
-COPY INTO STORES
-  FROM @walmart_stage/stores.csv
-  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
-
-COPY INTO FACT
-  FROM @walmart_stage/fact.csv
-  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
-
-  USE ROLE ACCOUNTADMIN;
-SELECT 'DEPARTMENT' AS table_name, COUNT(*) AS row_count FROM DBT_LEARNING.RAW.DEPARTMENT
-UNION ALL
-SELECT 'STORES', COUNT(*) FROM DBT_LEARNING.RAW.STORES
-UNION ALL
-SELECT 'FACT', COUNT(*) FROM DBT_LEARNING.RAW.FACT;
-
-SELECT * FROM DBT_LEARNING.RAW.DEPARTMENT LIMIT 5;
-SELECT * FROM DBT_LEARNING.RAW.STORES LIMIT 5;
-SELECT * FROM DBT_LEARNING.RAW.FACT LIMIT 5;
-
-USE ROLE ACCOUNTADMIN;
-SELECT COUNT(*) FROM DBT_LEARNING.DBT_PETER.DIM_STORE;
-SELECT COUNT(*) FROM DBT_LEARNING.DBT_PETER.DIM_DATE;
-SELECT COUNT(*) FROM DBT_LEARNING.DBT_PETER.FCT_WEEKLY_SALES;
-
-USE ROLE ACCOUNTADMIN;
-SHOW TABLES LIKE 'FCT_WEEKLY_SALES' IN ACCOUNT;
-
-USE ROLE ACCOUNTADMIN;
-SHOW TABLES LIKE 'FCT_WEEKLY_SALES' IN ACCOUNT;
-
-SELECT COUNT(*) FROM WALMART_E2E.DBT_PETER.DIM_STORE;
-SELECT COUNT(*) FROM WALMART_E2E.DBT_PETER.DIM_DATE;
-SELECT COUNT(*) FROM WALMART_E2E.DBT_PETER.FCT_WEEKLY_SALES;
-
-USE ROLE ACCOUNTADMIN;
-SELECT
-    d.year,
-    s.store_type,
-    ROUND(SUM(f.weekly_sales)) AS total_sales
-FROM WALMART_E2E.DBT_PETER.FCT_WEEKLY_SALES f
-JOIN WALMART_E2E.DBT_PETER.DIM_DATE  d ON f.date_key  = d.date_key
-JOIN WALMART_E2E.DBT_PETER.DIM_STORE s ON f.store_key = s.store_key
-GROUP BY d.year, s.store_type
-ORDER BY d.year, s.store_type;
-
-USE ROLE ACCOUNTADMIN;
-CREATE SCHEMA IF NOT EXISTS DBT_LEARNING.APPS;
-
-
-
-
- 
+-- Next: run `dbt build` (builds WALMART_E2E.DBT_PETER), then open the Streamlit app.
