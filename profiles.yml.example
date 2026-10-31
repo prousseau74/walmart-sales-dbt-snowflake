@@ -6,8 +6,8 @@ my_project:
       account: <your_account_identifier>
       user: <your_username>
       password: <your_password>
-      role: <your_role>
-      warehouse: <your_warehouse>
-      database: <your_database>
-      schema: dbt_dev
+      role: ACCOUNTADMIN
+      warehouse: COMPUTE_WH
+      database: WALMART_E2E
+      schema: DBT_PETER
       threads: 4
